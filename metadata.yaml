@@ -3,6 +3,6 @@ display_name: Home Assistant 控制器
 desc: 扫描 Home Assistant 实体并生成家居能力索引，让 AstrBot 通过自然语言安全控制设备。
 short_desc: 面向 AstrBot 的 Home Assistant 家居语义控制器。
 help: 先填写 Home Assistant 地址和长期访问令牌，然后用 /ha_rescan 生成控制器索引。
-version: v1.1.7
+version: v1.1.9
 author: Xhan258
 repo: https://github.com/Xhan258/astrbot_plugin_ha_control_layer

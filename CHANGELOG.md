@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.1.9
+
+- Treat room/area words in user requests as strong matching constraints, reducing cross-room device mistakes.
+- Ask for clarification when multiple same-type controllers match equally well and the user did not mention a room.
+- Improve room environment matching for temperature, humidity, and temperature/humidity summary queries.
+- Keep Home Assistant execution unchanged; this release only adjusts intent matching and packaging metadata.
+
+## v1.1.8
+
+- Add a read-only `ha_query_weather` LLM tool so weather questions can prefer Home Assistant instead of web search.
+- Try `daily` weather forecasts first and fall back to `hourly` forecasts when needed.
+- Detect room temperature and humidity sensors during scanning and group them into room environment controllers.
+- Improve natural-language matching for room temperature, humidity, and temperature/humidity summary queries.
+
 ## v1.1.7
 
 - Restore Home Assistant weather queries through the single `ha_execute_intent` entry point.

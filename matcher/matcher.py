@@ -29,9 +29,21 @@ class IntentMatcher:
 
     def match(self, index: ControllerIndex, slots: IntentSlots) -> MatchResult:
         controllers = [item for item in index.controllers if item.exposed]
+        area_hint = _detect_area_hint(index, slots)
+        if area_hint:
+            area_controllers = _filter_controllers_by_area(controllers, area_hint)
+            if not area_controllers:
+                return MatchResult(
+                    False,
+                    True,
+                    f"我没在 {area_hint} 找到已暴露的 Home Assistant 控制器。",
+                    candidates=[],
+                )
+            controllers = area_controllers
         controller_matches = _rank_controllers(controllers, slots)
         if not controller_matches:
-            return MatchResult(False, True, "我没找到对应的 Home Assistant 控制器。", candidates=[])
+            message = f"我没在 {area_hint} 找到对应的 Home Assistant 控制器。" if area_hint else "我没找到对应的 Home Assistant 控制器。"
+            return MatchResult(False, True, message, candidates=[item.display_name for item in controllers[:5]])
         weather_selection = _weather_controller_selection(controller_matches, slots)
         if isinstance(weather_selection, MatchResult):
             return weather_selection
@@ -47,7 +59,10 @@ class IntentMatcher:
 
         controller_score, controller = controller_matches[0]
         default_power = _default_power_capability(controller, slots)
-        if default_power:
+        combined_environment = _combined_environment_capability(controller, slots)
+        if combined_environment:
+            capability_matches = [(0.96, combined_environment)]
+        elif default_power:
             capability_matches = [(0.96, default_power)]
         else:
             capability_matches = _rank_capabilities(controller, slots)
@@ -116,6 +131,68 @@ def _rank_controllers(controllers: list[Controller], slots: IntentSlots) -> list
     return scored
 
 
+def _detect_area_hint(index: ControllerIndex, slots: IntentSlots) -> str:
+    text = str(slots.text or "")
+    explicit = str(getattr(slots, "area_hint", "") or "")
+    areas = _known_areas(index)
+    if explicit:
+        matched = _best_area_match(explicit, areas)
+        return matched or explicit
+    normalized_text = _normalize(text)
+    candidates = []
+    for area in areas:
+        normalized_area = _normalize(area)
+        if normalized_area and normalized_area in normalized_text:
+            candidates.append((len(normalized_area), area))
+    if candidates:
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        return candidates[0][1]
+    return ""
+
+
+def _known_areas(index: ControllerIndex) -> list[str]:
+    areas = []
+    for controller in index.controllers:
+        area = str(controller.area_name or "").strip()
+        if area and area not in areas:
+            areas.append(area)
+    return areas
+
+
+def _best_area_match(hint: str, areas: list[str]) -> str:
+    normalized_hint = _normalize(hint)
+    if not normalized_hint:
+        return ""
+    exact = [area for area in areas if _normalize(area) == normalized_hint]
+    if exact:
+        return exact[0]
+    contains = [area for area in areas if normalized_hint in _normalize(area) or _normalize(area) in normalized_hint]
+    if contains:
+        return sorted(contains, key=lambda item: (-len(_normalize(item)), item))[0]
+    return ""
+
+
+def _filter_controllers_by_area(controllers: list[Controller], area_hint: str) -> list[Controller]:
+    normalized_hint = _normalize(area_hint)
+    matches = []
+    for controller in controllers:
+        names = [
+            controller.area_name,
+            controller.display_name,
+            *controller.aliases,
+        ]
+        if any(_area_name_matches(normalized_hint, name) for name in names):
+            matches.append(controller)
+    return matches
+
+
+def _area_name_matches(normalized_hint: str, name: str) -> bool:
+    normalized_name = _normalize(name)
+    if not normalized_hint or not normalized_name:
+        return False
+    return normalized_hint == normalized_name or normalized_hint in normalized_name or normalized_name in normalized_hint
+
+
 def _weather_controller_selection(
     controller_matches: list[tuple[float, Controller]],
     slots: IntentSlots,
@@ -156,7 +233,21 @@ def _score_controller_by_capability(controller: Controller, slots: IntentSlots) 
         if slots.value_hint:
             value_score = max((_score_value(value, slots.value_hint) for value in cap.values), default=0.0)
             best = max(best, value_score * 0.8)
+    if _is_environment_query(slots) and _is_environment_controller(controller):
+        best = max(best, 0.94)
     return best
+
+
+def _is_environment_query(slots: IntentSlots) -> bool:
+    text = _normalize(f"{slots.text} {slots.capability_hint}")
+    return any(word in text for word in ["环境", "温湿度", "干湿度", "湿度", "潮不潮", "湿不湿", "干不干"])
+
+
+def _is_environment_controller(controller: Controller) -> bool:
+    if "环境" in str(controller.display_name or ""):
+        return True
+    capability_ids = {cap.capability_id for cap in controller.capabilities if cap.exposed}
+    return bool({"temperature", "humidity"} <= capability_ids)
 
 
 def _rank_capabilities(controller: Controller, slots: IntentSlots) -> list[tuple[float, Capability]]:
@@ -167,6 +258,8 @@ def _rank_capabilities(controller: Controller, slots: IntentSlots) -> list[tuple
         score = _score_capability(capability, slots)
         if slots.action in {"on", "off"} and capability.type == "switch_like":
             score = max(score, 0.78)
+        if slots.capability_hint == "温湿度" and capability.capability_id in {"temperature", "humidity"}:
+            score = max(score, 0.9)
         if slots.value_hint:
             score = max(score, max((_score_value(value, slots.value_hint) for value in capability.values), default=0.0) * 0.88)
         if score > 0:
@@ -183,6 +276,12 @@ def _default_power_capability(controller: Controller, slots: IntentSlots) -> Cap
     return _find_power_capability(controller)
 
 
+def _combined_environment_capability(controller: Controller, slots: IntentSlots) -> Capability | None:
+    if slots.capability_hint != "温湿度":
+        return None
+    return _find_capability_by_id(controller, "temperature") or _find_capability_by_id(controller, "humidity")
+
+
 def _has_specific_capability_hint(hint: str) -> bool:
     normalized = _normalize(hint)
     if not normalized:
@@ -195,6 +294,13 @@ def _find_power_capability(controller: Controller) -> Capability | None:
         if not capability.exposed:
             continue
         if capability.capability_id == "power" or capability.display_name == "电源":
+            return capability
+    return None
+
+
+def _find_capability_by_id(controller: Controller, capability_id: str) -> Capability | None:
+    for capability in controller.capabilities:
+        if capability.exposed and capability.capability_id == capability_id:
             return capability
     return None
 
@@ -287,6 +393,8 @@ def _score_names(hint: str, names: list[str]) -> float:
 def _is_ambiguous(matches: list[tuple[float, object]]) -> bool:
     if len(matches) < 2:
         return False
+    if matches[0][0] >= 0.99 and matches[1][0] >= 0.99:
+        return True
     return matches[0][0] < 0.99 and matches[0][0] - matches[1][0] < 0.08
 
 

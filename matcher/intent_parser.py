@@ -10,6 +10,7 @@ from dataclasses import dataclass
 class IntentSlots:
     text: str
     action: str = ""
+    area_hint: str = ""
     device_hint: str = ""
     capability_hint: str = ""
     value_hint: str = ""
@@ -20,13 +21,38 @@ class IntentSlots:
 def parse_intent(text: str) -> IntentSlots:
     value = str(text or "").strip()
     slots = IntentSlots(text=value)
-    slots.is_query = any(word in value for word in ["吗", "么", "是不是", "状态", "正常", "多少", "几度", "还有多久", "查", "查询", "天气", "预报"])
+    slots.is_query = any(word in value for word in ["吗", "么", "是不是", "状态", "正常", "多少", "几度", "湿度", "温湿度", "潮不潮", "湿不湿", "干不干", "还有多久", "查", "查询", "天气", "预报"])
     slots.action = _parse_action(value)
     slots.number = _extract_number(value)
+    slots.area_hint = _parse_area_hint(value)
     slots.capability_hint = _parse_capability_hint(value)
     slots.value_hint = _parse_value_hint(value, slots)
     slots.device_hint = _parse_device_hint(value, slots)
     return slots
+
+
+def _parse_area_hint(text: str) -> str:
+    areas = [
+        "主卧",
+        "次卧",
+        "卧室",
+        "客厅",
+        "厨房",
+        "阳台",
+        "书房",
+        "卫生间",
+        "浴室",
+        "餐厅",
+        "玄关",
+        "儿童房",
+        "老人房",
+        "衣帽间",
+        "未分区",
+    ]
+    for area in areas:
+        if area in text:
+            return area
+    return ""
 
 
 def _parse_action(text: str) -> str:
@@ -36,12 +62,16 @@ def _parse_action(text: str) -> str:
         return "on"
     if any(word in text for word in ["调到", "设为", "设置为", "设成", "改成", "改为", "开成", "开到", "切到", "切换到"]):
         return "set"
-    if any(word in text for word in ["查", "查询", "看看", "多少", "几度", "正常", "天气", "预报"]):
+    if any(word in text for word in ["查", "查询", "看看", "多少", "几度", "湿度", "温湿度", "潮不潮", "湿不湿", "干不干", "正常", "天气", "预报"]):
         return "query"
     return ""
 
 
 def _parse_capability_hint(text: str) -> str:
+    if any(word in text for word in ["温湿度", "干湿度", "环境"]):
+        return "温湿度"
+    if any(word in text for word in ["湿度", "潮不潮", "湿不湿", "干不干"]):
+        return "湿度"
     if any(word in text for word in ["几度", "多少度", "温度"]):
         return "温度"
     candidates = [

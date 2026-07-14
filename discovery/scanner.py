@@ -123,6 +123,7 @@ class ControllerScanner:
             "total_entities": len(normalized),
             "total_device_id_groups": len({item.device_id for item in normalized if item.device_id}),
             "controllers_built_from_device_id": 0,
+            "controllers_built_from_environment": 0,
             "controllers_built_from_prefix": 0,
             "standalone_controllers": 0,
             "entities_hidden_as_config_diagnostic_internal": 0,
@@ -251,6 +252,13 @@ def _normalize_state(state: dict[str, Any], registry_context: RegistryContext | 
     controller_name, capability_name = split_friendly_name(friendly_name, slug, domain)
     controller_id = _controller_id_from_slug(slug, controller_name, capability_name)
     capability_id = _capability_id(capability_name, slug, domain)
+    sensor_metric = _sensor_metric_kind(domain, attrs, friendly_name, slug)
+    if sensor_metric == "temperature":
+        capability_id = "temperature"
+        capability_name = "温度"
+    elif sensor_metric == "humidity":
+        capability_id = "humidity"
+        capability_name = "湿度"
     registry = (registry_context.registry_by_entity_id.get(entity_id, {}) if registry_context else {}) or {}
     if registry_context and registry:
         registry_context.matched_registry_by_entity_id += 1
@@ -298,6 +306,19 @@ def _normalize_state(state: dict[str, Any], registry_context: RegistryContext | 
         platform=str(registry.get("platform") or ""),
         area_resolved_by=area_resolved_by,
     )
+
+
+def _sensor_metric_kind(domain: str, attrs: dict[str, Any], friendly_name: str, slug: str) -> str:
+    if domain != "sensor":
+        return ""
+    device_class = str(attrs.get("device_class") or "").lower()
+    unit = str(attrs.get("unit_of_measurement") or "").lower()
+    text = f"{friendly_name} {slug}".lower()
+    if device_class == "temperature" or unit in {"°c", "℃", "c", "°f", "f"} or any(word in text for word in ["temperature", "temp", "温度"]):
+        return "temperature"
+    if device_class == "humidity" or unit == "%" or any(word in text for word in ["humidity", "湿度"]):
+        return "humidity"
+    return ""
 
 
 def split_friendly_name(friendly_name: str, slug: str, domain: str) -> tuple[str, str]:
@@ -549,11 +570,11 @@ def _controller_from_group(
     grouping_summary: dict[str, int],
 ) -> Controller:
     entities = sorted(group.entities, key=_entity_priority)
-    display_name = _group_display_name(entities, registry)
     primary = next((item for item in entities if not _is_internal_entity(item)), entities[0])
     area_id = next((item.area_id for item in entities if item.area_id), "")
     area_name = next((item.area_name for item in entities if item.area_name and item.area_name != "未分区"), "") or primary.area_name
     device_id = next((item.device_id for item in entities if item.device_id), "")
+    display_name = _environment_display_name(area_name) if group.source == "environment" else _group_display_name(entities, registry)
     controller = Controller(
         controller_id=group.group_key,
         display_name=display_name,
@@ -577,6 +598,8 @@ def _controller_from_group(
     )
     if group.source == "device_id":
         grouping_summary["controllers_built_from_device_id"] += 1
+    elif group.source == "environment":
+        grouping_summary["controllers_built_from_environment"] += 1
     elif group.source == "prefix":
         grouping_summary["controllers_built_from_prefix"] += 1
     else:
@@ -610,12 +633,24 @@ def _group_display_name(entities: list[NormalizedEntity], registry: RegistryCont
     return primary.controller_name or primary.friendly_name
 
 
+def _environment_display_name(area_name: str) -> str:
+    name = str(area_name or "").strip()
+    if name and name != "未分区":
+        return f"{name}环境"
+    return "环境"
+
+
 def _controller_aliases_from_name(name: str, primary: NormalizedEntity) -> list[str]:
     aliases = [name, primary.controller_name]
     if name.endswith("空调"):
         aliases.extend(["空调", "冷气"])
     if name.endswith("灯"):
         aliases.extend(["灯", "灯光"])
+    if name.endswith("环境"):
+        room = name[: -len("环境")]
+        aliases.extend(["环境", "温湿度", "温度", "湿度"])
+        if room:
+            aliases.extend([f"{room}温度", f"{room}湿度", f"{room}温湿度"])
     return list(dict.fromkeys(item for item in aliases if item))
 
 
@@ -674,6 +709,8 @@ def _pending_script(entity: NormalizedEntity) -> dict[str, Any]:
 
 def _controller_group_key(entity: NormalizedEntity) -> tuple[str, str]:
     area_prefix = _area_group_prefix(entity)
+    if _sensor_metric_kind(entity.domain, entity.attributes, entity.friendly_name, entity.entity_id) and area_prefix:
+        return f"{area_prefix}environment", "environment"
     if entity.device_id:
         return f"{area_prefix}device__{_slugify(entity.device_id)}", "device_id"
     prefix = _friendly_prefix(entity.friendly_name)
@@ -809,6 +846,7 @@ def _log_grouping_summary(grouping_summary: dict[str, int], controllers: dict[st
         "- total entities: %s\n"
         "- total device_id groups: %s\n"
         "- controllers built from device_id: %s\n"
+        "- controllers built from environment: %s\n"
         "- controllers built from prefix: %s\n"
         "- standalone controllers: %s\n"
         "- entities hidden as config/diagnostic/internal: %s\n"
@@ -816,6 +854,7 @@ def _log_grouping_summary(grouping_summary: dict[str, int], controllers: dict[st
         grouping_summary.get("total_entities", 0),
         grouping_summary.get("total_device_id_groups", 0),
         grouping_summary.get("controllers_built_from_device_id", 0),
+        grouping_summary.get("controllers_built_from_environment", 0),
         grouping_summary.get("controllers_built_from_prefix", 0),
         grouping_summary.get("standalone_controllers", 0),
         grouping_summary.get("entities_hidden_as_config_diagnostic_internal", 0),
@@ -987,11 +1026,12 @@ def _capability_aliases(name: str) -> list[str]:
     mapping = {
         "电源": ["开关"],
         "风速": ["风量"],
-        "温度": ["几度"],
+        "温度": ["几度", "多少度"],
         "模式": ["工作模式"],
         "风向": ["摆风", "扫风"],
         "亮度": ["明暗", "灯光亮度"],
         "色温": ["冷暖", "灯色", "颜色温度"],
+        "湿度": ["潮湿", "干不干", "湿不湿"],
     }
     return mapping.get(name, [])
 

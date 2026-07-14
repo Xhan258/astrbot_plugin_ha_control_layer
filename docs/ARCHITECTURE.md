@@ -7,8 +7,9 @@
 - 插件注册名：`astrbot_plugin_ha_control_layer`
 - 兼容旧页面/API 名称：`home_assistant_control_layer`
 - 展示名称：`Home Assistant 控制器`
-- 当前版本：`v1.1.7`
+- 当前版本：`v1.1.9`
 - 普通 LLM Tool：`ha_execute_intent`
+- 只读天气 LLM Tool：`ha_query_weather`
 
 插件的目标是把 Home Assistant 中分散的实体整理成 AstrBot 可以理解的控制器索引，并通过安全边界执行明确的设备控制。
 

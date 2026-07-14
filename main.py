@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from astrbot.api import FunctionTool, logger
@@ -17,7 +18,7 @@ from .matcher import IntentMatcher, parse_intent
 from .modules.homeassistant import HomeAssistantClient
 from .modules.permissions import PermissionChecker, PermissionConfig
 
-PLUGIN_VERSION = "1.1.7"
+PLUGIN_VERSION = "1.1.9"
 PLUGIN_NAME = "astrbot_plugin_ha_control_layer"
 LEGACY_PLUGIN_NAME = "home_assistant_control_layer"
 
@@ -65,7 +66,7 @@ class HATool(FunctionTool):
             name="ha_execute_intent",
             description=(
                 "Home Assistant 控制器唯一入口。所有智能家居、HA、灯、空调、冰箱、风扇、窗帘、"
-                "天气或传感器查询都必须调用本工具。不要使用 shell/curl/python/file_read，也不要读取 HA token。"
+                "传感器查询都必须调用本工具。不要使用 shell/curl/python/file_read，也不要读取 HA token。"
                 "本工具会根据 ControllerIndex 匹配控制器和能力，必要时内部安全调用 Home Assistant。"
             ),
             parameters={
@@ -89,6 +90,38 @@ class HATool(FunctionTool):
         except Exception as exc:  # noqa: BLE001
             logger.error("[HA Controller Index] ha_execute_intent failed: %s", exc, exc_info=True)
             return json.dumps({"success": False, "message": f"HA 控制层执行失败：{exc}"}, ensure_ascii=False)
+
+
+class HAWeatherTool(FunctionTool):
+    def __init__(self, plugin: "HomeAssistantControlLayerPlugin") -> None:
+        super().__init__(
+            name="ha_query_weather",
+            description=(
+                "只读查询 Home Assistant 天气。用户询问家里天气、最近天气、天气预报、明天后天、"
+                "近几天有没有雨、温度湿度风速时优先调用本工具，不要先使用网页搜索。"
+                "本工具只读取 HA weather 实体和 weather.get_forecasts，不控制任何设备。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "用户原话，例如：最近天气怎么样、明天有没有雨、这几天热不热。",
+                    }
+                },
+                "required": ["text"],
+            },
+            handler=None,
+        )
+        self.plugin = plugin
+
+    async def call(self, context: Any, **kwargs: Any) -> str:
+        event = context.context.event
+        try:
+            return await self.plugin.query_weather(event, str(kwargs.get("text", "") or ""))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[HA Controller Index] ha_query_weather failed: %s", exc, exc_info=True)
+            return json.dumps({"success": False, "message": f"HA 天气查询失败：{exc}"}, ensure_ascii=False)
 
 
 @register(
@@ -140,6 +173,7 @@ class HomeAssistantControlLayerPlugin(Star):
         self.matcher = IntentMatcher(confidence_threshold=self.confidence_threshold)
 
         self.context.add_llm_tools(HATool(self))
+        self.context.add_llm_tools(HAWeatherTool(self))
         self._register_web_api_if_available()
 
     @filter.command("ha_check")
@@ -179,8 +213,43 @@ class HomeAssistantControlLayerPlugin(Star):
             "Home Assistant 控制器\n"
             f"v{PLUGIN_VERSION}\n"
             "架构：ControllerIndex + IntentMatcher + SafeExecutor\n"
-            "LLM Tool：ha_execute_intent"
+            "LLM Tool：ha_execute_intent, ha_query_weather"
         )
+
+    async def query_weather(self, event: AstrMessageEvent, text: str) -> str:
+        if not self.client:
+            return _json({"success": False, "message": "Home Assistant 未配置。"})
+        if not self.permissions.can_query(event):
+            return _json({"success": False, "message": "没有查询 Home Assistant 天气的权限。"})
+
+        slots = parse_intent(text)
+        index = await self._effective_index()
+        candidates = _weather_candidates(index)
+        if not candidates:
+            return _json(
+                {
+                    "success": False,
+                    "message": "没有在 Home Assistant 控制器索引里找到 weather 天气实体。请确认 HA 中存在 weather.xxx，并执行 /ha_rescan。",
+                }
+            )
+        ranked = _rank_weather_candidates(candidates, text)
+        if len(ranked) > 1 and ranked[0][0] < 0.86 and ranked[0][0] - ranked[1][0] < 0.08:
+            return _json(
+                {
+                    "success": False,
+                    "need_clarification": True,
+                    "message": "你想查哪个天气？",
+                    "candidates": [controller.display_name for _, controller, _ in ranked[:5]],
+                }
+            )
+
+        _, controller, capability = ranked[0]
+        result = await self._weather_query_result(
+            SimpleNamespace(controller=controller, capability=capability),
+            slots,
+        )
+        result["tool"] = "ha_query_weather"
+        return _json(result)
 
     async def execute_intent(self, event: AstrMessageEvent, text: str) -> str:
         if not self.client:
@@ -245,7 +314,12 @@ class HomeAssistantControlLayerPlugin(Star):
             return {"success": False, "executed": False, "message": "这个查询能力没有对应实体。"}
         if match.capability.domain == "weather":
             return await self._weather_query_result(match, slots)
+        if _needs_environment_summary(match, slots):
+            return await self._environment_query_result(match, slots)
         state = await self.client.get_state(match.capability.entity_id)
+        attrs = state.get("attributes", {}) or {}
+        unit = attrs.get("unit_of_measurement", "")
+        unit_text = str(unit or "")
         return {
             "success": True,
             "executed": False,
@@ -255,7 +329,38 @@ class HomeAssistantControlLayerPlugin(Star):
             "entity_id": match.capability.entity_id,
             "state": state.get("state"),
             "attributes": _safe_attrs(state.get("attributes", {}) or {}),
-            "message": f"{match.controller.display_name if match.controller else '设备'}{match.capability.display_name}当前是 {state.get('state')}。",
+            "message": f"{match.controller.display_name if match.controller else '设备'}{match.capability.display_name}当前是 {state.get('state')}{unit_text}。",
+        }
+
+    async def _environment_query_result(self, match: Any, slots: Any) -> dict[str, Any]:
+        readings: list[dict[str, Any]] = []
+        for capability in getattr(match.controller, "capabilities", []) or []:
+            if capability.capability_id not in {"temperature", "humidity"} or not capability.entity_id:
+                continue
+            state = await self.client.get_state(capability.entity_id)
+            attrs = state.get("attributes", {}) or {}
+            readings.append(
+                {
+                    "capability": capability.display_name,
+                    "capability_id": capability.capability_id,
+                    "entity_id": capability.entity_id,
+                    "state": state.get("state"),
+                    "unit": attrs.get("unit_of_measurement", ""),
+                    "attributes": _safe_attrs(attrs),
+                }
+            )
+        if not readings:
+            return {"success": False, "executed": False, "message": "这个环境控制器没有可查询的温湿度实体。"}
+        summary = "，".join(f"{item['capability']} {item['state']}{item.get('unit') or ''}" for item in readings)
+        return {
+            "success": True,
+            "executed": False,
+            "query": True,
+            "type": "environment",
+            "controller": match.controller.display_name if match.controller else "",
+            "readings": readings,
+            "message": f"{match.controller.display_name if match.controller else '房间环境'}当前：{summary}。",
+            "reply_hint": "请用自然语言概括房间温湿度，不要直接贴 JSON。",
         }
 
     async def _weather_query_result(self, match: Any, slots: Any) -> dict[str, Any]:
@@ -278,20 +383,35 @@ class HomeAssistantControlLayerPlugin(Star):
             "reply_hint": "请用自然语言概括天气，不要直接贴 JSON。",
         }
         if _needs_weather_forecast(slots.text):
+            response, forecast_type, forecast_errors = await self._get_weather_forecast(entity_id)
+            forecast = _extract_weather_forecast(response, entity_id)
+            if forecast:
+                result["type"] = "weather_forecast"
+                result["forecast_type"] = forecast_type
+                result["forecast"] = forecast
+                result["message"] = f"已从 Home Assistant 查询 {match.controller.display_name if match.controller else '天气'} 的{forecast_type}天气预报。"
+            else:
+                result["forecast_error"] = "; ".join(forecast_errors) or "Home Assistant 未返回可用预报。"
+                result["message"] = f"已查到当前天气，但天气预报查询失败：{result['forecast_error']}"
+        return result
+
+    async def _get_weather_forecast(self, entity_id: str) -> tuple[Any, str, list[str]]:
+        errors: list[str] = []
+        for forecast_type in ["daily", "hourly"]:
             try:
                 response = await self.client.call_service(
                     "weather",
                     "get_forecasts",
-                    {"entity_id": entity_id, "type": "daily"},
+                    {"entity_id": entity_id, "type": forecast_type},
                     return_response=True,
                 )
-                result["type"] = "weather_forecast"
-                result["forecast"] = _extract_weather_forecast(response, entity_id)
-                result["message"] = f"已从 Home Assistant 查询 {match.controller.display_name if match.controller else '天气'} 的天气预报。"
             except Exception as exc:  # noqa: BLE001
-                result["forecast_error"] = str(exc)
-                result["message"] = f"已查到当前天气，但天气预报查询失败：{exc}"
-        return result
+                errors.append(f"{forecast_type}: {exc}")
+                continue
+            if _extract_weather_forecast(response, entity_id):
+                return response, forecast_type, errors
+            errors.append(f"{forecast_type}: Home Assistant 返回为空")
+        return None, "", errors
 
     async def _effective_index(self):
         generated = self.store.load_generated()
@@ -420,8 +540,67 @@ def _weather_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
     return {key: attrs[key] for key in keys if key in attrs}
 
 
+def _needs_environment_summary(match: Any, slots: Any) -> bool:
+    capability = getattr(match, "capability", None)
+    controller = getattr(match, "controller", None)
+    if not capability or capability.capability_id not in {"temperature", "humidity"}:
+        return False
+    text = str(getattr(slots, "text", "") or "")
+    if any(word in text for word in ["温湿度", "环境", "潮不潮", "湿不湿", "干不干"]):
+        capability_ids = {item.capability_id for item in getattr(controller, "capabilities", []) or [] if getattr(item, "exposed", True)}
+        return bool({"temperature", "humidity"} & capability_ids)
+    return False
+
+
 def _needs_weather_forecast(text: str) -> bool:
-    return any(word in str(text or "") for word in ["预报", "未来", "近几天", "这几天", "几天", "明天", "后天", "一周", "7天", "七天"])
+    return any(
+        word in str(text or "")
+        for word in ["预报", "未来", "最近", "近几天", "这几天", "几天", "明天", "后天", "一周", "7天", "七天", "雨", "下雨", "降雨"]
+    )
+
+
+def _weather_candidates(index: Any) -> list[tuple[Any, Any]]:
+    candidates: list[tuple[Any, Any]] = []
+    for controller in getattr(index, "controllers", []) or []:
+        if not getattr(controller, "exposed", True):
+            continue
+        for capability in getattr(controller, "capabilities", []) or []:
+            if not getattr(capability, "exposed", True):
+                continue
+            if capability.domain == "weather" or capability.capability_id == "weather":
+                candidates.append((controller, capability))
+    return candidates
+
+
+def _rank_weather_candidates(candidates: list[tuple[Any, Any]], text: str) -> list[tuple[float, Any, Any]]:
+    ranked = []
+    normalized_text = _normalize_text(text)
+    for controller, capability in candidates:
+        names = [
+            controller.display_name,
+            *getattr(controller, "aliases", []),
+            capability.display_name,
+            *getattr(capability, "aliases", []),
+        ]
+        score = max((_name_score(normalized_text, name) for name in names), default=0.0)
+        ranked.append((score, controller, capability))
+    ranked.sort(key=lambda item: (-item[0], item[1].controller_id))
+    return ranked
+
+
+def _name_score(normalized_text: str, name: str) -> float:
+    normalized_name = _normalize_text(name)
+    if not normalized_text or not normalized_name:
+        return 0.0
+    if normalized_text == normalized_name:
+        return 1.0
+    if normalized_name in normalized_text or normalized_text in normalized_name:
+        return 0.86
+    return 0.0
+
+
+def _normalize_text(text: str) -> str:
+    return "".join(ch for ch in str(text or "").lower() if ch not in " \t\r\n，,。.!！?？:：-－—_.*·")
 
 
 def _extract_weather_forecast(response: Any, entity_id: str) -> list[dict[str, Any]]:
