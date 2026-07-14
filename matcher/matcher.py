@@ -32,6 +32,11 @@ class IntentMatcher:
         controller_matches = _rank_controllers(controllers, slots)
         if not controller_matches:
             return MatchResult(False, True, "我没找到对应的 Home Assistant 控制器。", candidates=[])
+        weather_selection = _weather_controller_selection(controller_matches, slots)
+        if isinstance(weather_selection, MatchResult):
+            return weather_selection
+        if weather_selection:
+            controller_matches = weather_selection
         if _is_ambiguous(controller_matches):
             return MatchResult(
                 False,
@@ -111,6 +116,37 @@ def _rank_controllers(controllers: list[Controller], slots: IntentSlots) -> list
     return scored
 
 
+def _weather_controller_selection(
+    controller_matches: list[tuple[float, Controller]],
+    slots: IntentSlots,
+) -> list[tuple[float, Controller]] | MatchResult | None:
+    if not _is_weather_query(slots):
+        return None
+    weather_matches = [(score, controller) for score, controller in controller_matches if _find_weather_capability(controller)]
+    if not weather_matches:
+        return None
+    if len(weather_matches) == 1:
+        return weather_matches
+
+    named = sorted(
+        (
+            (_score_names(slots.text, [controller.display_name, *controller.aliases]), score, controller)
+            for score, controller in weather_matches
+        ),
+        key=lambda item: (-item[0], -item[1], item[2].controller_id),
+    )
+    if named and named[0][0] >= 0.86 and (len(named) == 1 or named[0][0] - named[1][0] >= 0.08):
+        name_score, score, controller = named[0]
+        return [(max(score, name_score), controller)]
+
+    return MatchResult(
+        False,
+        True,
+        "你想查哪个天气？",
+        candidates=[controller.display_name for _, controller in weather_matches[:5]],
+    )
+
+
 def _score_controller_by_capability(controller: Controller, slots: IntentSlots) -> float:
     best = 0.0
     for cap in controller.capabilities:
@@ -161,6 +197,20 @@ def _find_power_capability(controller: Controller) -> Capability | None:
         if capability.capability_id == "power" or capability.display_name == "电源":
             return capability
     return None
+
+
+def _find_weather_capability(controller: Controller) -> Capability | None:
+    for capability in controller.capabilities:
+        if not capability.exposed:
+            continue
+        if capability.domain == "weather" or capability.capability_id == "weather" or capability.display_name == "天气":
+            return capability
+    return None
+
+
+def _is_weather_query(slots: IntentSlots) -> bool:
+    text = _normalize(f"{slots.text} {slots.capability_hint}")
+    return "天气" in text or "预报" in text or "气象" in text
 
 
 def _score_capability(capability: Capability, slots: IntentSlots) -> float:

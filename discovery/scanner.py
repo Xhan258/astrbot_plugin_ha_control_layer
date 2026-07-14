@@ -27,6 +27,7 @@ CONTROL_DOMAINS = {
     "sensor",
     "binary_sensor",
     "switch",
+    "weather",
 }
 
 IGNORED_DOMAINS = {"automation"}
@@ -375,6 +376,16 @@ def _capabilities_from_entity(entity: NormalizedEntity) -> list[Capability]:
         return [_fan_capability(entity)]
     if domain == "light":
         return _light_capabilities(entity)
+    if domain == "weather":
+        return [Capability(
+            capability_id="weather",
+            display_name="天气",
+            aliases=["天气预报", "预报", "气象"],
+            type="query",
+            entity_id=entity.entity_id,
+            domain=domain,
+            exposed=True,
+        )]
     if domain in {"sensor", "binary_sensor"}:
         return [Capability(
             capability_id=entity.capability_id,
@@ -1089,6 +1100,7 @@ def _default_capability_for_domain(domain: str) -> str:
         "sensor": "状态",
         "binary_sensor": "状态",
         "climate": "空调",
+        "weather": "天气",
     }.get(domain, "状态")
 
 

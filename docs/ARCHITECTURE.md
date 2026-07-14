@@ -7,7 +7,7 @@
 - 插件注册名：`astrbot_plugin_ha_control_layer`
 - 兼容旧页面/API 名称：`home_assistant_control_layer`
 - 展示名称：`Home Assistant 控制器`
-- 当前版本：`v1.1.6`
+- 当前版本：`v1.1.7`
 - 普通 LLM Tool：`ha_execute_intent`
 
 插件的目标是把 Home Assistant 中分散的实体整理成 AstrBot 可以理解的控制器索引，并通过安全边界执行明确的设备控制。
@@ -95,6 +95,7 @@ select
 sensor
 binary_sensor
 switch
+weather
 ```
 
 其中 `automation` 默认忽略。
@@ -324,10 +325,13 @@ device registry 提供：
 - `color`：颜色。
 - `effect`：灯效。
 - `query`：状态查询。
+- `weather`：天气查询。
 
 灯类设备如果存在 `light` 实体，会优先从 `light` 实体生成开关、亮度、色温、颜色和灯效能力。
 
 空调、风扇、select、number、input helper 会按 domain 和实体属性生成对应能力。
+
+`weather` 实体只生成查询能力。当前天气通过 `GET /api/states/{entity_id}` 读取；天气预报通过 `weather.get_forecasts` 并带 `return_response` 调用。
 
 ## Script 与 Automation
 

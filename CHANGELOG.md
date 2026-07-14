@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.7
+
+- Restore Home Assistant weather queries through the single `ha_execute_intent` entry point.
+- Add `weather` entities to the controller index as query-only capabilities.
+- Support current weather through `GET /api/states/{entity_id}`.
+- Support forecast queries through Home Assistant `weather.get_forecasts`.
+- Ask for clarification when multiple weather entities match a generic weather query.
+
 ## v1.1.6
 
 - Update marketplace identity to `astrbot_plugin_ha_control_layer`.

@@ -17,7 +17,7 @@ from .matcher import IntentMatcher, parse_intent
 from .modules.homeassistant import HomeAssistantClient
 from .modules.permissions import PermissionChecker, PermissionConfig
 
-PLUGIN_VERSION = "1.1.6"
+PLUGIN_VERSION = "1.1.7"
 PLUGIN_NAME = "astrbot_plugin_ha_control_layer"
 LEGACY_PLUGIN_NAME = "home_assistant_control_layer"
 
@@ -207,7 +207,7 @@ class HomeAssistantControlLayerPlugin(Star):
             return _json({"success": False, "executed": False, "message": match.message or "未匹配到 Home Assistant 控制器。"})
 
         if slots.is_query or slots.action == "query" or (match.capability and match.capability.type == "query"):
-            return _json(await self._query_result(match))
+            return _json(await self._query_result(match, slots))
 
         if not self.permissions.can_control(event):
             return _json({"success": False, "executed": False, "message": "没有控制 Home Assistant 的权限。"})
@@ -240,9 +240,11 @@ class HomeAssistantControlLayerPlugin(Star):
             }
         )
 
-    async def _query_result(self, match: Any) -> dict[str, Any]:
+    async def _query_result(self, match: Any, slots: Any) -> dict[str, Any]:
         if not match.capability or not match.capability.entity_id:
             return {"success": False, "executed": False, "message": "这个查询能力没有对应实体。"}
+        if match.capability.domain == "weather":
+            return await self._weather_query_result(match, slots)
         state = await self.client.get_state(match.capability.entity_id)
         return {
             "success": True,
@@ -255,6 +257,41 @@ class HomeAssistantControlLayerPlugin(Star):
             "attributes": _safe_attrs(state.get("attributes", {}) or {}),
             "message": f"{match.controller.display_name if match.controller else '设备'}{match.capability.display_name}当前是 {state.get('state')}。",
         }
+
+    async def _weather_query_result(self, match: Any, slots: Any) -> dict[str, Any]:
+        entity_id = match.capability.entity_id
+        state = await self.client.get_state(entity_id)
+        current = {
+            "condition": state.get("state"),
+            "attributes": _weather_attrs(state.get("attributes", {}) or {}),
+        }
+        result = {
+            "success": True,
+            "executed": False,
+            "query": True,
+            "type": "weather",
+            "controller": match.controller.display_name if match.controller else "",
+            "capability": match.capability.display_name,
+            "entity_id": entity_id,
+            "current": current,
+            "message": f"{match.controller.display_name if match.controller else '天气'}当前天气是 {state.get('state')}。",
+            "reply_hint": "请用自然语言概括天气，不要直接贴 JSON。",
+        }
+        if _needs_weather_forecast(slots.text):
+            try:
+                response = await self.client.call_service(
+                    "weather",
+                    "get_forecasts",
+                    {"entity_id": entity_id, "type": "daily"},
+                    return_response=True,
+                )
+                result["type"] = "weather_forecast"
+                result["forecast"] = _extract_weather_forecast(response, entity_id)
+                result["message"] = f"已从 Home Assistant 查询 {match.controller.display_name if match.controller else '天气'} 的天气预报。"
+            except Exception as exc:  # noqa: BLE001
+                result["forecast_error"] = str(exc)
+                result["message"] = f"已查到当前天气，但天气预报查询失败：{exc}"
+        return result
 
     async def _effective_index(self):
         generated = self.store.load_generated()
@@ -365,6 +402,57 @@ def _normalize_domain(value: Any) -> str:
 def _safe_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
     keys = ["friendly_name", "unit_of_measurement", "device_class", "temperature", "humidity", "options"]
     return {key: attrs[key] for key in keys if key in attrs}
+
+
+def _weather_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "friendly_name",
+        "temperature",
+        "humidity",
+        "pressure",
+        "wind_bearing",
+        "wind_speed",
+        "visibility",
+        "ozone",
+        "uv_index",
+        "precipitation",
+    ]
+    return {key: attrs[key] for key in keys if key in attrs}
+
+
+def _needs_weather_forecast(text: str) -> bool:
+    return any(word in str(text or "") for word in ["预报", "未来", "近几天", "这几天", "几天", "明天", "后天", "一周", "7天", "七天"])
+
+
+def _extract_weather_forecast(response: Any, entity_id: str) -> list[dict[str, Any]]:
+    if not isinstance(response, dict):
+        return []
+    payload = response.get("service_response", response)
+    if isinstance(payload, dict):
+        candidates = [
+            payload.get(entity_id),
+            payload.get("forecast"),
+            payload.get("forecasts"),
+        ]
+        for value in candidates:
+            forecast = _forecast_list(value)
+            if forecast:
+                return forecast
+        for value in payload.values():
+            forecast = _forecast_list(value)
+            if forecast:
+                return forecast
+    return []
+
+
+def _forecast_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        forecast = value.get("forecast")
+        if isinstance(forecast, list):
+            return [item for item in forecast if isinstance(item, dict)]
+    return []
 
 
 def _json(data: dict[str, Any]) -> str:

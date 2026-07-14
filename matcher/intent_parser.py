@@ -20,7 +20,7 @@ class IntentSlots:
 def parse_intent(text: str) -> IntentSlots:
     value = str(text or "").strip()
     slots = IntentSlots(text=value)
-    slots.is_query = any(word in value for word in ["吗", "么", "是不是", "状态", "正常", "多少", "几度", "还有多久", "查", "查询"])
+    slots.is_query = any(word in value for word in ["吗", "么", "是不是", "状态", "正常", "多少", "几度", "还有多久", "查", "查询", "天气", "预报"])
     slots.action = _parse_action(value)
     slots.number = _extract_number(value)
     slots.capability_hint = _parse_capability_hint(value)
@@ -36,7 +36,7 @@ def _parse_action(text: str) -> str:
         return "on"
     if any(word in text for word in ["调到", "设为", "设置为", "设成", "改成", "改为", "开成", "开到", "切到", "切换到"]):
         return "set"
-    if any(word in text for word in ["查", "查询", "看看", "多少", "几度", "正常"]):
+    if any(word in text for word in ["查", "查询", "看看", "多少", "几度", "正常", "天气", "预报"]):
         return "query"
     return ""
 
@@ -45,6 +45,8 @@ def _parse_capability_hint(text: str) -> str:
     if any(word in text for word in ["几度", "多少度", "温度"]):
         return "温度"
     candidates = [
+        "天气预报",
+        "天气",
         "珍品变温",
         "健康气流",
         "强力安静",
