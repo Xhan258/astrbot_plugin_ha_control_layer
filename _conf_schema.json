@@ -1,0 +1,93 @@
+{
+  "basic": {
+    "description": "普通设置",
+    "type": "object",
+    "hint": "只填 Home Assistant 地址和长期访问令牌。设备、能力和值会从 Home Assistant 自动扫描出来。",
+    "items": {
+      "home_assistant_url": {
+        "description": "Home Assistant 地址",
+        "type": "string",
+        "hint": "例如：http://homeassistant.local:8123 或 http://192.168.1.4:8123"
+      },
+      "ha_token": {
+        "description": "Home Assistant 长期访问令牌",
+        "type": "string",
+        "hint": "在 Home Assistant 个人资料页创建 Long-Lived Access Token"
+      },
+      "confidence_threshold": {
+        "description": "自动执行置信度",
+        "type": "float",
+        "default": 0.62,
+        "hint": "越高越保守。匹配不够确定时会让 Bot 追问。"
+      }
+    }
+  },
+  "advanced": {
+    "description": "高级设置",
+    "type": "object",
+    "hint": "一般不用改。这里用于权限控制和危险服务拦截。",
+    "items": {
+      "admin_users": {
+        "description": "允许控制的用户",
+        "type": "list",
+        "default": [],
+        "hint": "留空表示不限制用户。可填 QQ 号或 AstrBot 用户 ID。"
+      },
+      "admin_groups": {
+        "description": "允许控制的群",
+        "type": "list",
+        "default": [],
+        "hint": "留空表示不限制群。"
+      },
+      "allow_query_without_admin": {
+        "description": "允许非管理员查询状态",
+        "type": "bool",
+        "default": true
+      },
+      "dangerous_entities": {
+        "description": "禁止直接控制的实体",
+        "type": "list",
+        "default": [],
+        "hint": "例如门锁、燃气、安防相关实体。列入后会拒绝自动控制。"
+      },
+      "allowed_control_domains": {
+        "description": "允许控制的 HA 类型",
+        "type": "list",
+        "default": [
+          "climate",
+          "fan",
+          "input_boolean",
+          "input_number",
+          "input_select",
+          "light",
+          "number",
+          "scene",
+          "script",
+          "select",
+          "switch"
+        ]
+      },
+      "blocked_service_domains": {
+        "description": "禁止调用的危险服务",
+        "type": "list",
+        "default": [
+          "alarm_control_panel",
+          "camera",
+          "command_line",
+          "hassio",
+          "lock",
+          "python_script",
+          "pyscript",
+          "rest_command",
+          "shell_command",
+          "siren"
+        ]
+      },
+      "request_timeout": {
+        "description": "请求 Home Assistant 超时秒数",
+        "type": "int",
+        "default": 10
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Home Assistant 控制器</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">HA</span>
+          <div>
+            <strong>控制器索引</strong>
+            <span>只整理，不控制</span>
+          </div>
+        </div>
+        <nav id="sideNav" class="side-nav"></nav>
+      </aside>
+      <main class="workspace">
+        <div id="app" class="fallback">
+          <p class="eyebrow">Home Assistant 控制器</p>
+          <h1>正在加载 WebUI</h1>
+          <p class="page-subtitle">如果一直停在这里，说明 app.js 没有成功加载或执行。</p>
+        </div>
+      </main>
+    </div>
+    <script>
+      (function () {
+        function showPageError(title, detail) {
+          var app = document.getElementById("app");
+          if (!app) return;
+          app.innerHTML =
+            '<div style="padding:24px">' +
+            '<p class="eyebrow">Home Assistant 控制器</p>' +
+            '<h1>' + title + '</h1>' +
+            '<p class="page-subtitle">' + String(detail || "") + '</p>' +
+            '</div>';
+        }
+        window.addEventListener("error", function (event) {
+          showPageError("WebUI 脚本错误", event.message || event.error || "未知错误");
+        });
+        window.addEventListener("unhandledrejection", function (event) {
+          var reason = event.reason;
+          showPageError("WebUI 异步错误", reason && reason.message ? reason.message : reason || "未知异步错误");
+        });
+        window.__HA_CONTROLLER_SHOW_ERROR__ = showPageError;
+      })();
+    </script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
