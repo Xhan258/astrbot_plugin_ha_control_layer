@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -455,9 +456,13 @@ class HomeAssistantControlLayerPlugin(Star):
             logger.warning("[HA Controller Index] register_web_api unavailable: %s", exc)
 
     async def _api_controllers(self, *args: Any, **kwargs: Any):
+        if not _is_local_request(*args, **kwargs):
+            return {"success": False, "message": "Forbidden: local access only."}
         return self.store.effective_index().to_dict()
 
     async def _api_rescan(self, *args: Any, **kwargs: Any):
+        if not _is_local_request(*args, **kwargs):
+            return {"success": False, "message": "Forbidden: local access only."}
         if not self.client:
             return {"success": False, "message": "Home Assistant 未配置。"}
         index = await self._rescan()
@@ -466,6 +471,8 @@ class HomeAssistantControlLayerPlugin(Star):
         return data
 
     async def _api_pending(self, *args: Any, **kwargs: Any):
+        if not _is_local_request(*args, **kwargs):
+            return {"success": False, "message": "Forbidden: local access only."}
         return {"pending": self.store.effective_index().pending}
 
     async def _api_update_controller(self, *args: Any, **kwargs: Any):
@@ -636,6 +643,35 @@ def _forecast_list(value: Any) -> list[dict[str, Any]]:
 
 def _json(data: dict[str, Any]) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def _is_local_request(*args: Any, **kwargs: Any) -> bool:
+    """Return True only when the HTTP request originates from localhost.
+
+    The web API endpoints are served by AstrBot's embedded HTTP server which is
+    typically only reachable from the local network.  Restricting write/trigger
+    endpoints to loopback addresses prevents any LAN host from, for example,
+    forcing a re-scan or reading the full device list without authentication.
+    """
+    # Try to extract the remote address from common WSGI/ASGI request objects
+    # that AstrBot or Quart may pass as positional or keyword arguments.
+    for candidate in [*args, *kwargs.values()]:
+        remote = None
+        if hasattr(candidate, "remote_addr"):
+            remote = str(candidate.remote_addr or "")
+        elif hasattr(candidate, "remote"):
+            remote = str(candidate.remote or "")
+        elif isinstance(candidate, dict):
+            remote = str(candidate.get("REMOTE_ADDR") or candidate.get("remote_addr") or "")
+        if not remote:
+            continue
+        try:
+            return ipaddress.ip_address(remote.split(":")[0]).is_loopback
+        except ValueError:
+            continue
+    # If the framework does not expose the remote address here, allow the
+    # request so the plugin does not silently break on unsupported runtimes.
+    return True
 
 
 async def _extract_payload(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:

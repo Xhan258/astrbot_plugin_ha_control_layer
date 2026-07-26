@@ -216,9 +216,19 @@ class HomeAssistantClient:
         command_type: str,
     ) -> Any:
         await ws.send_json({"id": command_id, "type": command_type})
+        # Guard against an unbounded loop: HA should respond to a single
+        # command within a small number of interleaved messages.  If 100
+        # messages arrive without the expected id, something is wrong.
+        max_skips = 100
+        skipped = 0
         while True:
             message = await ws.receive_json()
             if message.get("id") != command_id:
+                skipped += 1
+                if skipped >= max_skips:
+                    raise HomeAssistantError(
+                        f"{command_type} response not received after {max_skips} messages"
+                    )
                 continue
             if not message.get("success", False):
                 error = message.get("error", {})

@@ -74,12 +74,11 @@ def _parse_capability_hint(text: str) -> str:
         return "湿度"
     if any(word in text for word in ["几度", "多少度", "温度"]):
         return "温度"
+    # Generic capability names only — device-specific terms (e.g. brand feature
+    # names) belong in the controller index aliases, not here.
     candidates = [
         "天气预报",
         "天气",
-        "珍品变温",
-        "健康气流",
-        "强力安静",
         "除甲醛",
         "色温",
         "温度",
@@ -125,21 +124,46 @@ def _parse_value_hint(text: str, slots: IntentSlots) -> str:
 
 
 def _parse_device_hint(text: str, slots: IntentSlots) -> str:
-    known = ["珍品变温", "空调", "冰箱", "风扇", "窗帘", "灯"]
+    # Common device type words. Brand-specific terms (e.g. "珍品变温") should
+    # be handled through controller aliases, not hardcoded here.
+    known = [
+        "空调",
+        "冰箱",
+        "风扇",
+        "窗帘",
+        "灯",
+        "电视",
+        "插座",
+        "热水器",
+        "扫地机",
+        "净化器",
+        "加湿器",
+        "除湿机",
+        "暖气",
+        "地暖",
+        "新风",
+    ]
     for item in known:
         if item in text:
-            if item == "珍品变温":
-                return "冰箱"
             return item
     return ""
 
 
 def _extract_number(text: str) -> float | None:
-    match = re.search(r"(-?\d+(?:\.\d+)?)\s*(?:℃|度|摄氏度|%|百分比)?", text)
-    if not match:
-        return None
-    value = float(match.group(1))
-    return int(value) if value.is_integer() else value
+    # Only extract a number when it is followed by a unit or preceded by a
+    # clear setter phrase, so bare ordinals like "3楼" or "第2个" are ignored.
+    unit_pattern = re.search(r"(-?\d+(?:\.\d+)?)\s*(?:℃|度|摄氏度|%|百分比)", text)
+    if unit_pattern:
+        value = float(unit_pattern.group(1))
+        return int(value) if value.is_integer() else value
+    setter_match = re.search(
+        r"(?:调到|设为|设置为|设成|改成|改为|调成|调为|开到|开成)\s*(-?\d+(?:\.\d+)?)",
+        text,
+    )
+    if setter_match:
+        value = float(setter_match.group(1))
+        return int(value) if value.is_integer() else value
+    return None
 
 
 def _clean_value(text: str) -> str:

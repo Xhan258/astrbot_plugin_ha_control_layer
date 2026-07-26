@@ -732,7 +732,10 @@ def _controller_group_key(entity: NormalizedEntity) -> tuple[str, str]:
         return f"{area_prefix}device__{_slugify(entity.device_id)}", "device_id"
     prefix = _friendly_prefix(entity.friendly_name)
     if prefix:
-        return f"{area_prefix}prefix__{_slugify(prefix)}", "prefix"
+        # Use the slug-derived controller_id (from the entity_id, not the
+        # mutable friendly_name) so the group key stays stable when the user
+        # renames the device in HA.
+        return f"{area_prefix}prefix__{entity.controller_id}", "prefix"
     return f"{area_prefix}standalone__{entity.controller_id}", "standalone"
 
 
@@ -1030,13 +1033,6 @@ def _binding_label(binding: Binding | None) -> str:
         return "missing"
     entity_id = _binding_entity_id(binding)
     return f"{binding.domain}.{binding.service} {entity_id}".strip()
-
-
-def _controller_aliases(entity: NormalizedEntity) -> list[str]:
-    aliases = [entity.controller_name]
-    if entity.controller_name.endswith("空调"):
-        aliases.extend(["空调", "冷气"])
-    return list(dict.fromkeys(item for item in aliases if item))
 
 
 def _capability_aliases(name: str) -> list[str]:
