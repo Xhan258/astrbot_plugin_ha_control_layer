@@ -67,6 +67,7 @@ class NormalizedEntity:
     hidden_by: str = ""
     platform: str = ""
     area_resolved_by: str = "unresolved"
+    registry_aliases: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -214,7 +215,9 @@ async def _load_registry_context(client: Any) -> RegistryContext:
     )
 
 
-def _normalize_registry_entity(item: dict[str, Any]) -> dict[str, str]:
+def _normalize_registry_entity(item: dict[str, Any]) -> dict[str, Any]:
+    # HA WebSocket compact format uses short keys: "as" = aliases, "en" = name, etc.
+    raw_aliases = item.get("as") or item.get("aliases") or []
     return {
         "entity_id": str(item.get("ei") or item.get("entity_id") or ""),
         "area_id": str(item.get("ai") or item.get("area_id") or ""),
@@ -223,6 +226,7 @@ def _normalize_registry_entity(item: dict[str, Any]) -> dict[str, str]:
         "hidden_by": str(item.get("hb") or item.get("hidden_by") or ""),
         "platform": str(item.get("pl") or item.get("platform") or ""),
         "name": str(item.get("en") or item.get("name") or ""),
+        "aliases": [str(a) for a in raw_aliases if a],
     }
 
 
@@ -248,7 +252,11 @@ def _normalize_state(state: dict[str, Any], registry_context: RegistryContext | 
     entity_id = str(state.get("entity_id", "") or "")
     domain, slug = entity_id.split(".", 1) if "." in entity_id else ("", entity_id)
     attrs = state.get("attributes", {}) or {}
-    friendly_name = str(attrs.get("friendly_name") or entity_id)
+    registry = (registry_context.registry_by_entity_id.get(entity_id, {}) if registry_context else {}) or {}
+    # Prefer the user-customised name from the entity registry over the
+    # integration-supplied friendly_name so HA UI renames are respected.
+    registry_name = str(registry.get("name") or "")
+    friendly_name = registry_name or str(attrs.get("friendly_name") or entity_id)
     controller_name, capability_name = split_friendly_name(friendly_name, slug, domain)
     controller_id = _controller_id_from_slug(slug, controller_name, capability_name)
     capability_id = _capability_id(capability_name, slug, domain)
@@ -305,6 +313,7 @@ def _normalize_state(state: dict[str, Any], registry_context: RegistryContext | 
         hidden_by=str(registry.get("hidden_by") or ""),
         platform=str(registry.get("platform") or ""),
         area_resolved_by=area_resolved_by,
+        registry_aliases=[str(a) for a in (registry.get("aliases") or []) if a],
     )
 
 
@@ -575,10 +584,18 @@ def _controller_from_group(
     area_name = next((item.area_name for item in entities if item.area_name and item.area_name != "未分区"), "") or primary.area_name
     device_id = next((item.device_id for item in entities if item.device_id), "")
     display_name = _environment_display_name(area_name) if group.source == "environment" else _group_display_name(entities, registry)
+    # Collect aliases set in the HA entity registry for all entities in this
+    # group and merge them into the controller aliases so they are available
+    # to the intent matcher without requiring manual configuration.
+    registry_aliases: list[str] = []
+    for entity in entities:
+        for alias in entity.registry_aliases:
+            if alias and alias not in registry_aliases:
+                registry_aliases.append(alias)
     controller = Controller(
         controller_id=group.group_key,
         display_name=display_name,
-        aliases=_controller_aliases_from_name(display_name, primary),
+        aliases=list(dict.fromkeys(_controller_aliases_from_name(display_name, primary) + registry_aliases)),
         area_id=area_id,
         area_name=area_name,
         source={
