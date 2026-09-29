@@ -47,6 +47,19 @@ POWER_MISBINDING_KEYWORDS = [
     "boost",
 ]
 
+CLIMATE_SUPPORT_TURN_OFF = 128
+CLIMATE_SUPPORT_TURN_ON = 256
+
+CLIMATE_HVAC_MODE_NAMES: dict[str, tuple[str, list[str]]] = {
+    "heat": ("制热", ["暖风"]),
+    "cool": ("制冷", ["冷风"]),
+    "dry": ("除湿", ["干燥"]),
+    "fan_only": ("送风", ["通风"]),
+    "auto": ("自动", ["自动模式"]),
+    "heat_cool": ("自动冷暖", ["冷暖自动"]),
+    "off": ("关闭", ["关机", "关掉"]),
+}
+
 
 @dataclass
 class NormalizedEntity:
@@ -392,7 +405,7 @@ def _capabilities_from_entity(entity: NormalizedEntity) -> list[Capability]:
         )]
 
     if domain == "climate":
-        return [_climate_capability(entity)]
+        return _climate_capabilities(entity)
     if domain == "fan":
         return [_fan_capability(entity)]
     if domain == "light":
@@ -420,21 +433,75 @@ def _capabilities_from_entity(entity: NormalizedEntity) -> list[Capability]:
     return []
 
 
-def _climate_capability(entity: NormalizedEntity) -> Capability:
-    caps = Capability(
-        capability_id="climate",
-        display_name="空调",
-        aliases=["温控", "空调"],
-        type="climate",
-        entity_id=entity.entity_id,
-        domain="climate",
-    )
-    modes = [str(item) for item in entity.attributes.get("hvac_modes", []) or [] if str(item)]
-    for mode in modes:
-        caps.values.append(
-            CapabilityValue(mode, mode, [], Binding("climate", "set_hvac_mode", {"entity_id": entity.entity_id, "hvac_mode": mode}))
+def _climate_capabilities(entity: NormalizedEntity) -> list[Capability]:
+    """Build only the climate capabilities that HA explicitly exposes."""
+    capabilities = [
+        Capability(
+            capability_id="temperature",
+            display_name="温度",
+            aliases=["温控", "目标温度", "几度", "多少度"],
+            type="climate",
+            entity_id=entity.entity_id,
+            domain="climate",
         )
-    return caps
+    ]
+    modes = [str(item) for item in entity.attributes.get("hvac_modes", []) or [] if str(item)]
+    if modes:
+        mode_capability = Capability(
+            capability_id="mode",
+            display_name="模式",
+            aliases=["工作模式", "空调模式"],
+            type="select",
+            entity_id=entity.entity_id,
+            domain="climate",
+            service="set_hvac_mode",
+        )
+        for mode in modes:
+            display_name, aliases = _climate_hvac_mode_name(mode)
+            mode_capability.values.append(
+                CapabilityValue(
+                    mode,
+                    display_name,
+                    aliases,
+                    Binding("climate", "set_hvac_mode", {"entity_id": entity.entity_id, "hvac_mode": mode}),
+                )
+            )
+        capabilities.append(mode_capability)
+
+    supported_features = _climate_supported_features(entity.attributes)
+    power_values: list[CapabilityValue] = []
+    if supported_features & CLIMATE_SUPPORT_TURN_ON:
+        power_values.append(
+            CapabilityValue("on", "开", ["打开", "开启", "开机"], Binding("climate", "turn_on", {"entity_id": entity.entity_id}))
+        )
+    if supported_features & CLIMATE_SUPPORT_TURN_OFF:
+        power_values.append(
+            CapabilityValue("off", "关", ["关闭", "关掉", "关机"], Binding("climate", "turn_off", {"entity_id": entity.entity_id}))
+        )
+    if power_values:
+        capabilities.append(
+            Capability(
+                capability_id="power",
+                display_name="电源",
+                aliases=["开关"],
+                type="switch_like",
+                entity_id=entity.entity_id,
+                domain="climate",
+                values=power_values,
+            )
+        )
+    return capabilities
+
+
+def _climate_hvac_mode_name(mode: str) -> tuple[str, list[str]]:
+    return CLIMATE_HVAC_MODE_NAMES.get(mode, (mode, []))
+
+
+def _climate_supported_features(attributes: dict[str, Any]) -> int:
+    try:
+        return int(attributes.get("supported_features", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _fan_capability(entity: NormalizedEntity) -> Capability:

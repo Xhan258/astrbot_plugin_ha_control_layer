@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.10
+
+- Scan standard `climate.xxx` entities into separate temperature, mode, and explicitly supported power capabilities.
+- Map standard HVAC modes such as `heat`, `cool`, and `dry` to Chinese names and aliases while preserving their Home Assistant values and bindings.
+- Only expose standard climate power bindings when the entity declares `TURN_ON` and/or `TURN_OFF` support.
+
 ## v1.1.9
 
 - Treat room/area words in user requests as strong matching constraints, reducing cross-room device mistakes.

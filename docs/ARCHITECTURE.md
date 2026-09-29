@@ -7,7 +7,7 @@
 - 插件注册名：`astrbot_plugin_ha_control_layer`
 - 兼容旧页面/API 名称：`home_assistant_control_layer`
 - 展示名称：`Home Assistant 控制器`
-- 当前版本：`v1.1.9`
+- 当前版本：`v1.1.10`
 - 普通 LLM Tool：`ha_execute_intent`
 - 只读天气 LLM Tool：`ha_query_weather`
 
@@ -329,6 +329,8 @@ device registry 提供：
 - `weather`：天气查询。
 
 灯类设备如果存在 `light` 实体，会优先从 `light` 实体生成开关、亮度、色温、颜色和灯效能力。
+
+标准 `climate.xxx` 会按实体属性生成独立的温度、模式和电源能力。模式值来自实际 `hvac_modes`，并在扫描阶段保存 `climate.set_hvac_mode` Binding；电源仅在 `supported_features` 明确包含 `TURN_ON` 或 `TURN_OFF` 时才生成对应 Binding。Matcher 只选择索引中已存在的能力和值，不根据用户文本临时猜测 HA service。
 
 空调、风扇、select、number、input helper 会按 domain 和实体属性生成对应能力。
 

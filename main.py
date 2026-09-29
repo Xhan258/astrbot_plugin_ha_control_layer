@@ -18,7 +18,7 @@ from .matcher import IntentMatcher, parse_intent
 from .modules.homeassistant import HomeAssistantClient
 from .modules.permissions import PermissionChecker, PermissionConfig
 
-PLUGIN_VERSION = "1.1.9"
+PLUGIN_VERSION = "1.1.10"
 PLUGIN_NAME = "astrbot_plugin_ha_control_layer"
 LEGACY_PLUGIN_NAME = "home_assistant_control_layer"
 

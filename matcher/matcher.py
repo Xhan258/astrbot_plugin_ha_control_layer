@@ -255,6 +255,12 @@ def _rank_capabilities(controller: Controller, slots: IntentSlots) -> list[tuple
     for capability in controller.capabilities:
         if not capability.exposed:
             continue
+        if (
+            slots.action in {"on", "off"}
+            and not _has_specific_capability_hint(slots.capability_hint)
+            and capability.type != "switch_like"
+        ):
+            continue
         score = _score_capability(capability, slots)
         if slots.action in {"on", "off"} and capability.type == "switch_like":
             score = max(score, 0.78)
