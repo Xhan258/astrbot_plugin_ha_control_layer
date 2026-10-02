@@ -125,13 +125,37 @@ def _parse_value_hint(text: str, slots: IntentSlots) -> str:
 
 
 def _parse_device_hint(text: str, slots: IntentSlots) -> str:
-    known = ["珍品变温", "空调", "冰箱", "风扇", "窗帘", "灯"]
-    for item in known:
+    if "珍品变温" in text:
+        return "冰箱"
+
+    ac_companion = re.search(r"空调(?:伴侣)?\s*\d+", text, flags=re.IGNORECASE)
+    if ac_companion:
+        return re.sub(r"\s+", "", ac_companion.group(0))
+
+    lamp_hint = _parse_lamp_hint(text, slots.area_hint)
+    if lamp_hint:
+        return lamp_hint
+
+    for item in ["空调", "冰箱", "风扇", "窗帘"]:
         if item in text:
-            if item == "珍品变温":
-                return "冰箱"
             return item
+    if "灯" in text:
+        return "灯"
     return ""
+
+
+def _parse_lamp_hint(text: str, area_hint: str) -> str:
+    candidates: list[str] = []
+    for match in re.finditer(r"[\u4e00-\u9fffA-Za-z0-9]{1,16}灯", text):
+        candidate = match.group(0)
+        candidate = re.sub(r"^(?:请|帮我|把|将|打开|关闭|开启|关掉|开|关)+", "", candidate)
+        candidate = re.sub(r"^(?:[一二三四五六七八九十\d]+楼|地下[一二三四五六七八九十\d]*层)", "", candidate)
+        if area_hint and candidate.startswith(area_hint):
+            candidate = candidate[len(area_hint):]
+        candidate = candidate.strip("的 ")
+        if candidate and candidate not in {"灯", "灯光", "开灯", "关灯", "亮灯", "点灯"}:
+            candidates.append(candidate)
+    return max(candidates, key=len) if candidates else ""
 
 
 def _extract_number(text: str) -> float | None:

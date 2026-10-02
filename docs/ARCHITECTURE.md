@@ -7,7 +7,7 @@
 - 插件注册名：`astrbot_plugin_ha_control_layer`
 - 兼容旧页面/API 名称：`home_assistant_control_layer`
 - 展示名称：`Home Assistant 控制器`
-- 当前版本：`v1.1.10`
+- 当前版本：`v1.1.11`
 - 普通 LLM Tool：`ha_execute_intent`
 - 只读天气 LLM Tool：`ha_query_weather`
 
@@ -80,6 +80,8 @@ REST API 用于状态读取和 service 执行。WebSocket API 用于读取 entit
 - 隐藏配置项、诊断项、遥控器槽位、参数重置等内部实体。
 - 过滤 `automation`。
 - 谨慎处理 `script`，只自动绑定明确属于设备能力的脚本。
+- 指示灯保留为隐藏能力；多路物理继电器保留为独立能力，避免共享 `power` 标识时互相覆盖。
+- 标准 `climate` 的 HVAC 模式和风速值只从实体实际声明的 `hvac_modes`、`fan_modes` 生成 Binding。
 
 当前扫描层关注的 domain：
 

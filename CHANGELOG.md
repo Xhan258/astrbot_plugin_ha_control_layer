@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.11
+
+- Keep panel indicator lights as hidden `indicator_light` capabilities so they cannot replace a device's real relay power binding.
+- Preserve independently named relays from multi-channel switch devices as separate capabilities with their own bindings.
+- Prefer explicit device names over generic device categories during intent matching, and treat generic light requests with multiple candidates as ambiguous.
+- Scan standard `climate.xxx` `fan_modes` into a bound fan-speed capability without inventing unsupported values.
+
 ## v1.1.10
 
 - Scan standard `climate.xxx` entities into separate temperature, mode, and explicitly supported power capabilities.

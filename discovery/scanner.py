@@ -60,6 +60,20 @@ CLIMATE_HVAC_MODE_NAMES: dict[str, tuple[str, list[str]]] = {
     "off": ("关闭", ["关机", "关掉"]),
 }
 
+CLIMATE_FAN_MODE_NAMES: dict[str, tuple[str, list[str]]] = {
+    "auto": ("自动", ["自动风"]),
+    "low": ("低风", ["低", "最低", "最小", "小风"]),
+    "medium": ("中风", ["中", "中档"]),
+    "high": ("高风", ["高", "最高", "最大", "强风"]),
+    "低": ("低", ["低风", "最低", "最小", "小风"]),
+    "中": ("中", ["中风", "中档"]),
+    "高": ("高", ["高风", "最高", "最大", "强风"]),
+    "低风": ("低风", ["低", "最低", "最小", "小风"]),
+    "中风": ("中风", ["中", "中档"]),
+    "高风": ("高风", ["高", "最高", "最大", "强风"]),
+    "自动": ("自动", ["自动风"]),
+}
+
 
 @dataclass
 class NormalizedEntity:
@@ -353,7 +367,11 @@ def split_friendly_name(friendly_name: str, slug: str, domain: str) -> tuple[str
     return name, _default_capability_for_domain(domain)
 
 
-def _capabilities_from_entity(entity: NormalizedEntity) -> list[Capability]:
+def _capabilities_from_entity(
+    entity: NormalizedEntity,
+    *,
+    switch_capability: tuple[str, str] | None = None,
+) -> list[Capability]:
     domain = entity.domain
     if domain in {"input_select", "select"}:
         options = [str(item) for item in entity.attributes.get("options", []) or [] if str(item)]
@@ -379,10 +397,11 @@ def _capabilities_from_entity(entity: NormalizedEntity) -> list[Capability]:
         )]
 
     if domain in {"input_boolean", "switch"}:
+        capability_id, display_name = switch_capability or (entity.capability_id, entity.capability_name)
         return [Capability(
-            capability_id=entity.capability_id,
-            display_name=entity.capability_name,
-            aliases=_capability_aliases(entity.capability_name),
+            capability_id=capability_id,
+            display_name=display_name,
+            aliases=_capability_aliases(display_name),
             type="switch_like",
             entity_id=entity.entity_id,
             domain=domain,
@@ -490,11 +509,37 @@ def _climate_capabilities(entity: NormalizedEntity) -> list[Capability]:
                 values=power_values,
             )
         )
+    fan_modes = [str(item) for item in entity.attributes.get("fan_modes", []) or [] if str(item)]
+    if fan_modes:
+        fan_mode_capability = Capability(
+            capability_id="fan_mode",
+            display_name="风速",
+            aliases=["风量", "风力"],
+            type="select",
+            entity_id=entity.entity_id,
+            domain="climate",
+            service="set_fan_mode",
+        )
+        for mode in fan_modes:
+            display_name, aliases = _climate_fan_mode_name(mode)
+            fan_mode_capability.values.append(
+                CapabilityValue(
+                    mode,
+                    display_name,
+                    aliases,
+                    Binding("climate", "set_fan_mode", {"entity_id": entity.entity_id, "fan_mode": mode}),
+                )
+            )
+        capabilities.append(fan_mode_capability)
     return capabilities
 
 
 def _climate_hvac_mode_name(mode: str) -> tuple[str, list[str]]:
     return CLIMATE_HVAC_MODE_NAMES.get(mode, (mode, []))
+
+
+def _climate_fan_mode_name(mode: str) -> tuple[str, list[str]]:
+    return CLIMATE_FAN_MODE_NAMES.get(mode, (mode, []))
 
 
 def _climate_supported_features(attributes: dict[str, Any]) -> int:
@@ -520,6 +565,20 @@ def _fan_capability(entity: NormalizedEntity) -> Capability:
 
 
 def _light_capabilities(entity: NormalizedEntity) -> list[Capability]:
+    if _is_indicator_light(entity):
+        return [Capability(
+            capability_id="indicator_light",
+            display_name="指示灯",
+            aliases=["面板指示灯", "呼吸灯"],
+            type="switch_like",
+            entity_id=entity.entity_id,
+            domain="light",
+            exposed=False,
+            values=[
+                CapabilityValue("on", "开", [], Binding("light", "turn_on", {"entity_id": entity.entity_id})),
+                CapabilityValue("off", "关", [], Binding("light", "turn_off", {"entity_id": entity.entity_id})),
+            ],
+        )]
     capabilities = [
         Capability(
             capability_id="power",
@@ -672,16 +731,24 @@ def _controller_from_group(
     else:
         grouping_summary["standalone_controllers"] += 1
 
+    switch_capabilities = _multi_switch_capabilities(entities)
     for entity in entities:
         is_hidden = _is_internal_entity(entity)
         _append_entity_source(controller, entity.entity_id)
         if is_hidden:
             grouping_summary["entities_hidden_as_config_diagnostic_internal"] += 1
             controller.source.setdefault("hidden_entities", []).append(entity.entity_id)
-        for capability in _capabilities_from_entity(entity):
+        for capability in _capabilities_from_entity(
+            entity,
+            switch_capability=switch_capabilities.get(entity.entity_id),
+        ):
             if is_hidden:
                 capability.exposed = False
             _add_or_replace_capability(controller, capability)
+    for capability in controller.capabilities:
+        if capability.capability_id.startswith("switch_") and capability.display_name:
+            controller.aliases.append(capability.display_name)
+    controller.aliases = list(dict.fromkeys(controller.aliases))
     return controller
 
 
@@ -695,7 +762,7 @@ def _group_display_name(entities: list[NormalizedEntity], registry: RegistryCont
     prefix = _common_prefix_from_group(entities)
     if prefix:
         return prefix
-    primary = next((item for item in entities if item.domain == "light"), None)
+    primary = next((item for item in entities if item.domain == "light" and not _is_indicator_light(item)), None)
     primary = primary or next((item for item in entities if not _is_internal_entity(item)), entities[0])
     return primary.controller_name or primary.friendly_name
 
@@ -711,8 +778,6 @@ def _controller_aliases_from_name(name: str, primary: NormalizedEntity) -> list[
     aliases = [name, primary.controller_name]
     if name.endswith("空调"):
         aliases.extend(["空调", "冷气"])
-    if name.endswith("灯"):
-        aliases.extend(["灯", "灯光"])
     if name.endswith("环境"):
         room = name[: -len("环境")]
         aliases.extend(["环境", "温湿度", "温度", "湿度"])
@@ -721,10 +786,54 @@ def _controller_aliases_from_name(name: str, primary: NormalizedEntity) -> list[
     return list(dict.fromkeys(item for item in aliases if item))
 
 
+def _is_indicator_light(entity: NormalizedEntity) -> bool:
+    if entity.domain != "light":
+        return False
+    return "indicator_light" in entity.entity_id.lower() or "指示灯" in entity.friendly_name
+
+
+def _multi_switch_capabilities(entities: list[NormalizedEntity]) -> dict[str, tuple[str, str]]:
+    """Keep named relay channels separate when one HA device exposes several switches."""
+    named = [
+        (entity, _switch_relay_label(entity))
+        for entity in entities
+        if entity.domain == "switch"
+    ]
+    named = [(entity, label) for entity, label in named if label]
+    if len(named) < 2:
+        return {}
+
+    labels: dict[str, int] = defaultdict(int)
+    for _, label in named:
+        labels[label] += 1
+
+    capabilities: dict[str, tuple[str, str]] = {}
+    for entity, label in named:
+        capability_id = f"switch_{_slugify(label)}"
+        if labels[label] > 1:
+            capability_id = f"{capability_id}_{hashlib.sha1(entity.entity_id.encode('utf-8')).hexdigest()[:6]}"
+        capabilities[entity.entity_id] = (capability_id, label)
+    return capabilities
+
+
+def _switch_relay_label(entity: NormalizedEntity) -> str:
+    """Extract a relay label only when HA provides a device-name prefix to remove."""
+    friendly_name = str(entity.friendly_name or "").strip()
+    device_name = str(entity.device_name or "").strip()
+    if not friendly_name or not device_name or not friendly_name.startswith(device_name):
+        return ""
+    label = friendly_name[len(device_name):].strip(" -*＊－—_")
+    label = re.sub(r"\s*(?:左键|右键|按键)\s*$", "", label).strip()
+    label = re.sub(r"\s*(?:开关|电源)\s*$", "", label).strip()
+    return "" if label in {"", "开关", "电源"} else label
+
+
 def _entity_priority(entity: NormalizedEntity) -> tuple[int, str]:
     if _is_internal_entity(entity):
         return (9, entity.entity_id)
     if entity.domain == "light":
+        if _is_indicator_light(entity):
+            return (3, entity.entity_id)
         return (0, entity.entity_id)
     if entity.domain in {"climate", "fan"}:
         return (1, entity.entity_id)

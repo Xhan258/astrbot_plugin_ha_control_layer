@@ -128,7 +128,17 @@ def _rank_controllers(controllers: list[Controller], slots: IntentSlots) -> list
         if score > 0:
             scored.append((score, controller))
     scored.sort(key=lambda item: (-item[0], item[1].controller_id))
+    explicitly_named = [item for item in scored if _controller_display_name_in_text(item[1], slots.text)]
+    if len(explicitly_named) == 1:
+        return explicitly_named
     return scored
+
+
+def _controller_display_name_in_text(controller: Controller, text: str) -> bool:
+    display_name = _normalize(controller.display_name)
+    if display_name in {"", "灯", "灯光", "空调", "冰箱", "风扇", "窗帘"}:
+        return False
+    return display_name in _normalize(text)
 
 
 def _detect_area_hint(index: ControllerIndex, slots: IntentSlots) -> str:
@@ -251,6 +261,14 @@ def _is_environment_controller(controller: Controller) -> bool:
 
 
 def _rank_capabilities(controller: Controller, slots: IntentSlots) -> list[tuple[float, Capability]]:
+    named = [
+        capability
+        for capability in controller.capabilities
+        if capability.exposed and _normalize(capability.display_name) == _normalize(slots.device_hint)
+    ]
+    if len(named) == 1 and _normalize(slots.device_hint) not in {"", "灯", "灯光", "空调", "冰箱", "风扇", "窗帘"}:
+        return [(1.0, named[0])]
+
     scored = []
     for capability in controller.capabilities:
         if not capability.exposed:
